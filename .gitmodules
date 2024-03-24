@@ -1,0 +1,6 @@
+[submodule "deps/cardinal-staking"]
+	path = deps/cardinal-staking
+	url = https://github.com/coral-xyz/cardinal-staking.git
+[submodule "deps/mpl-token-metadata"]
+	path = deps/mpl-token-metadata
+	url = https://github.com/metaplex-foundation/mpl-token-metadata.git
