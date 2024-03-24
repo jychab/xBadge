@@ -28,7 +28,9 @@ pub mod badge_staking {
         instructions::stake_badge_for_authorization::handler(ctx)
     }
 
-    // pub fn unstake<'info>(ctx: Context<'_, '_, '_, 'info, Unstake<'info>>) -> Result<()> {
-    //     instructions::unstake::handler(ctx)
-    // }
+    pub fn unstake_badge_for_deauthorization<'info>(
+        ctx: Context<'_, '_, '_, 'info, UnstakeBadgeForDeauthorization<'info>>,
+    ) -> Result<()> {
+        instructions::unstake_badge_for_deauthorization::handler(ctx)
+    }
 }
