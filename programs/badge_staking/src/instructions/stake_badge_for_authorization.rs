@@ -4,14 +4,14 @@ use crate::{
     contexts::StakeBadgeForAuthorization, state::COLLECTION_STAKE_POOL_PREFIX, CustomError,
 };
 use anchor_lang::{prelude::*, solana_program};
-use anchor_spl::token;
+use anchor_spl::token::{self, Transfer};
 use mpl_token_metadata::accounts::Metadata;
 
 pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, StakeBadgeForAuthorization<'info>>,
 ) -> Result<()> {
-    ctx.accounts.stake_account.authority = ctx.accounts.mint_payer_ata.mint;
-    ctx.accounts.stake_account.bump = *ctx.bumps.get("stake_account").unwrap();
+    ctx.accounts.vault_authority.authority = ctx.accounts.mint_payer_ata.mint;
+    ctx.accounts.vault_authority.bump = *ctx.bumps.get("vault_authority").unwrap();
 
     let badge_metadata = Metadata::safe_deserialize(
         ctx.accounts
@@ -39,8 +39,14 @@ pub fn handler<'info>(
         return err!(CustomError::NoCollectionFound);
     }
 
-    //transfer badge to pda for staking
-    token::transfer(ctx.accounts.into_transfer_to_pda_context(), 1)?;
+    let cpi_program = ctx.accounts.token_program.to_account_info();
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.badge_payer_ata.to_account_info(),
+        to: ctx.accounts.badge_vault_authority_ata.to_account_info(),
+        authority: ctx.accounts.payer.to_account_info(),
+    };
+    let token_transfer_context = CpiContext::new(cpi_program, cpi_accounts);
+    token::transfer(token_transfer_context, 1)?;
 
     //authorize mint for staking
     authorize_mint_cpi(ctx);
@@ -57,10 +63,11 @@ fn authorize_mint_cpi(ctx: Context<'_, '_, '_, '_, StakeBadgeForAuthorization<'_
         AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
     ];
 
-    let init_pool_discriminator: [u8; 8] = [116, 233, 199, 204, 115, 159, 171, 36];
+    let authorize_mint_discriminator: [u8; 8] = [9, 39, 140, 25, 174, 113, 9, 242];
 
     let mut bytes_data = vec![];
-    bytes_data.extend(init_pool_discriminator);
+    bytes_data.extend(authorize_mint_discriminator);
+    bytes_data.extend(ctx.accounts.mint_payer_ata.mint.to_bytes());
 
     let account_infos: Vec<AccountInfo> = vec![
         ctx.accounts.stake_pool.to_account_info(),
@@ -77,10 +84,6 @@ fn authorize_mint_cpi(ctx: Context<'_, '_, '_, '_, StakeBadgeForAuthorization<'_
         &ctx.accounts
             .collection_stake_pool_pda_authority
             .collection
-            .as_ref(),
-        &ctx.accounts
-            .collection_stake_pool_pda_authority
-            .stake_pool
             .as_ref(),
         &[ctx.accounts.collection_stake_pool_pda_authority.bump],
     ]];

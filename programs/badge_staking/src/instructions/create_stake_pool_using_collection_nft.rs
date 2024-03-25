@@ -77,10 +77,6 @@ pub fn handler<'info>(
             .collection_stake_pool_pda_authority
             .collection
             .as_ref(),
-        &ctx.accounts
-            .collection_stake_pool_pda_authority
-            .stake_pool
-            .as_ref(),
         &[ctx.accounts.collection_stake_pool_pda_authority.bump],
     ]];
     let _invoke = solana_program::program::invoke_signed(

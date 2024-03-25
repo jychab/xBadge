@@ -12,4 +12,6 @@ pub enum CustomError {
     NoCollectionFound,
     #[msg("Badge collection does not match given stake pool")]
     StakePoolMismatch,
+    #[msg("Unable to deauthorize mint because mint is still staked")]
+    MintIsStillStaked,
 }

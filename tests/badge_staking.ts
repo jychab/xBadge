@@ -1,11 +1,17 @@
 import { BadgeStaking } from "../target/types/badge_staking";
 import {
   MPL_TOKEN_METADATA_PROGRAM_ID,
+  TokenStandard,
   createNft,
+  createV1,
   fetchDigitalAssetWithAssociatedToken,
+  findMetadataPda,
+  mintV1,
   mplTokenMetadata,
+  verifyCollectionV1,
 } from "@metaplex-foundation/mpl-token-metadata";
 import {
+  KeypairSigner,
   generateSigner,
   keypairIdentity,
   percentAmount,
@@ -30,23 +36,17 @@ import {
   toWeb3JsKeypair,
   toWeb3JsPublicKey,
 } from "@metaplex-foundation/umi-web3js-adapters";
-import { stakePool } from "../deps/cardinal-staking/src";
+import { TOKEN_PROGRAM_ID } from "@coral-xyz/anchor/dist/cjs/utils/token";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
+import { assert } from "chai";
+import { step, xstep } from "mocha-steps";
 
 describe("badge_staking", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
-
-  // Managed Token Semifungible token creation
-  // const prod = false;
-  // const underdogApiEndpoint = prod
-  //   ? "https://mainnet.underdogprotocol.com/v2"
-  //   : "https://devnet.underdogprotocol.com/v2";
-  // const underdogApiKey = "9c8ee3b29c0286.25ad082a2c1d4d5485c37020dd79ae7b";
-  // const underdogConfig = {
-  //   headers: {
-  //     Authorization: `Bearer ${underdogApiKey}`,
-  //   },
-  // };
 
   //
   // Program APIs.
@@ -74,8 +74,15 @@ describe("badge_staking", () => {
   );
   umi.use(mplTokenMetadata()).use(keypairIdentity(signer));
 
-  let collectionMintAddress;
-  before("Create a colletion nft", async () => {
+  let collectionMintAddress: KeypairSigner["publicKey"];
+  let collectionMetadataAddress;
+  let identifierId;
+  let identifier;
+
+  let mintAddress: KeypairSigner["publicKey"];
+  let badgeAddress: KeypairSigner["publicKey"];
+
+  step("Create a colletion nft & mint fungible asset", async () => {
     await umi.rpc.airdrop(signer.publicKey, sol(2));
     const collectionMint = generateSigner(umi);
     await createNft(umi, {
@@ -88,10 +95,7 @@ describe("badge_staking", () => {
       isCollection: true,
     }).sendAndConfirm(umi);
     collectionMintAddress = collectionMint.publicKey;
-  });
-
-  it("Create a collection nft & Initialize a stake pool", async () => {
-    const [collectionMetadataAddress] = PublicKey.findProgramAddressSync(
+    [collectionMetadataAddress] = PublicKey.findProgramAddressSync(
       [
         Buffer.from("metadata"),
         toWeb3JsPublicKey(MPL_TOKEN_METADATA_PROGRAM_ID).toBuffer(),
@@ -100,19 +104,56 @@ describe("badge_staking", () => {
       toWeb3JsPublicKey(MPL_TOKEN_METADATA_PROGRAM_ID)
     );
 
-    const identifierId = PublicKey.findProgramAddressSync(
+    const mint = generateSigner(umi);
+    await createNft(umi, {
+      tokenOwner: signer.publicKey,
+      mint: mint,
+      name: "XYZ",
+      uri: "https://example.com/my-collection.json",
+      sellerFeeBasisPoints: percentAmount(5.5), // 5.5%
+    }).sendAndConfirm(umi);
+    mintAddress = mint.publicKey;
+
+    const badge = generateSigner(umi);
+    await createV1(umi, {
+      mint: badge,
+      authority: umi.payer,
+      name: "My NFT",
+      uri: "",
+      sellerFeeBasisPoints: percentAmount(5.5),
+      collection: { verified: false, key: collectionMintAddress },
+      tokenStandard: TokenStandard.FungibleAsset,
+    }).sendAndConfirm(umi);
+    badgeAddress = badge.publicKey;
+
+    await verifyCollectionV1(umi, {
+      metadata: findMetadataPda(umi, { mint: badge.publicKey }),
+      collectionMint: collectionMintAddress,
+      authority: umi.payer,
+    }).sendAndConfirm(umi);
+
+    await mintV1(umi, {
+      mint: badge.publicKey,
+      authority: umi.payer,
+      amount: 1,
+      tokenOwner: signer.publicKey,
+      tokenStandard: TokenStandard.FungibleAsset,
+    }).sendAndConfirm(umi);
+  });
+
+  step("Initialize an identifier if required", async () => {
+    [identifierId] = PublicKey.findProgramAddressSync(
       [Buffer.from("identifier")],
       stakePoolProgram.programId
-    )[0];
+    );
     const identifierData =
       await stakePoolProgram.account.identifier.fetchNullable(identifierId);
 
-    const identifier =
+    identifier =
       identifierData !== null ? identifierData.count : new anchor.BN(1);
 
-    const transaction = new Transaction();
     if (!identifierData) {
-      const ix = await stakePoolProgram.methods
+      await stakePoolProgram.methods
         .initIdentifier()
         .accounts({
           identifier: identifierId,
@@ -120,20 +161,20 @@ describe("badge_staking", () => {
           systemProgram: SystemProgram.programId,
         })
         .signers([toWeb3JsKeypair(signer)])
-        .instruction();
-      transaction.add(ix);
+        .rpc();
     }
+  });
 
-    const stakePoolId = PublicKey.findProgramAddressSync(
+  step("Initialize a stake pool", async () => {
+    const [stakePoolId] = PublicKey.findProgramAddressSync(
       [Buffer.from("stake-pool"), identifier.toArrayLike(Buffer, "le", 8)],
       stakePoolProgram.programId
-    )[0];
+    );
 
     const [collectionStakePoolPdaAuthority] = PublicKey.findProgramAddressSync(
       [
         Buffer.from("collection-stake-pool"),
         toWeb3JsPublicKey(collectionMintAddress).toBuffer(),
-        stakePoolId.toBuffer(),
       ],
       program.programId
     );
@@ -144,9 +185,9 @@ describe("badge_staking", () => {
       signer.publicKey
     );
 
-    transaction.add(
+    try {
       await program.methods
-        .initialize({
+        .createStakePoolUsingCollectionNft({
           overlayText: "Fock it.",
           imageUri: "https://www.madlads.com/mad_lads_logo.svg",
           requiresCollections: [],
@@ -170,24 +211,197 @@ describe("badge_staking", () => {
           systemProgram: SystemProgram.programId,
         })
         .signers([toWeb3JsKeypair(signer)])
-        .instruction()
-    );
-    try {
-      await program.provider.sendAndConfirm(transaction, [
-        toWeb3JsKeypair(signer),
-      ]);
+        .rpc();
     } catch (e) {
       console.log(e);
     }
 
-    const collectionStakePoolAccount =
-      await program.account.collectionStakePoolAccount.fetch(
+    const collectionStakePoolPdaAuthorityAccountData =
+      await program.account.collectionStakePoolPdaAuthorityAccount.fetch(
         collectionStakePoolPdaAuthority
       );
-    console.log(collectionStakePoolAccount);
+    assert(
+      collectionStakePoolPdaAuthorityAccountData.collection.toBase58() ===
+        toWeb3JsPublicKey(collectionMintAddress).toBase58(),
+      `StakePoolPda Collection: ${
+        collectionStakePoolPdaAuthorityAccountData.collection
+      } not equals ${toWeb3JsPublicKey(collectionMintAddress)}`
+    );
+    assert(
+      collectionStakePoolPdaAuthorityAccountData.stakePool.toBase58() ===
+        stakePoolId.toBase58(),
+      `StakePoolPda StakePool: ${collectionStakePoolPdaAuthorityAccountData.stakePool} not equals ${stakePoolId}`
+    );
     const stakeAccountData = await stakePoolProgram.account.stakePool.fetch(
       stakePoolId
     );
-    console.log(stakeAccountData);
+    assert(
+      stakeAccountData.authority.toBase58() ===
+        collectionStakePoolPdaAuthority.toBase58(),
+      `StakeAccountData Authority: ${stakeAccountData.authority} not equals ${collectionStakePoolPdaAuthority}`
+    );
+  });
+
+  step("Stake Badge for Authorization", async () => {
+    const [badgeMetadata] = findMetadataPda(umi, { mint: badgeAddress });
+
+    const [vaultAuthority] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("vault-authority"),
+        toWeb3JsPublicKey(mintAddress).toBuffer(),
+      ],
+      program.programId
+    );
+    const [collectionStakePoolPdaAuthority] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("collection-stake-pool"),
+        toWeb3JsPublicKey(collectionMintAddress).toBuffer(),
+      ],
+      program.programId
+    );
+    const stakePoolId = (
+      await program.account.collectionStakePoolPdaAuthorityAccount.fetch(
+        collectionStakePoolPdaAuthority
+      )
+    ).stakePool;
+    const [stakeAuthorizationRecord] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("stake-authorization"),
+        stakePoolId.toBuffer(),
+        toWeb3JsPublicKey(mintAddress).toBuffer(),
+      ],
+      stakePoolProgram.programId
+    );
+    const mintPayerAta = await fetchDigitalAssetWithAssociatedToken(
+      umi,
+      mintAddress,
+      signer.publicKey
+    );
+    const badgePayerAta = await fetchDigitalAssetWithAssociatedToken(
+      umi,
+      badgeAddress,
+      signer.publicKey
+    );
+    const badgeVaultAuthorityAta = getAssociatedTokenAddressSync(
+      toWeb3JsPublicKey(badgeAddress),
+      vaultAuthority,
+      true
+    );
+    try {
+      await program.methods
+        .stakeBadgeForAuthorization()
+        .accounts({
+          mintPayerAta: mintPayerAta.token.publicKey,
+          vaultAuthority: vaultAuthority,
+          badgeVaultAuthorityAta: badgeVaultAuthorityAta,
+          stakePool: stakePoolId,
+          stakePoolProgram: stakePoolProgram.programId,
+          stakeAuthorizationRecord: stakeAuthorizationRecord,
+          collectionStakePoolPdaAuthority: collectionStakePoolPdaAuthority,
+          badge: badgeAddress,
+          badgePayerAta: badgePayerAta.token.publicKey,
+          badgeMetadata: badgeMetadata,
+          payer: signer.publicKey,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([toWeb3JsKeypair(signer)])
+        .rpc();
+    } catch (e) {
+      console.log(e);
+    }
+
+    const stakeAuthorizationRecordData =
+      await stakePoolProgram.account.stakeAuthorizationRecord.fetch(
+        stakeAuthorizationRecord
+      );
+    assert(
+      stakeAuthorizationRecordData.mint.toBase58() ===
+        toWeb3JsPublicKey(mintAddress).toBase58(),
+      "Invalid mint on authorization record"
+    );
+    assert(
+      stakeAuthorizationRecordData.pool.toBase58() === stakePoolId.toBase58(),
+      "Invalid stake pool id on authorization record"
+    );
+  });
+
+  step("Unstake Badge for Deauthorization", async () => {
+    const [vaultAuthority] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("vault-authority"),
+        toWeb3JsPublicKey(mintAddress).toBuffer(),
+      ],
+      program.programId
+    );
+    const [collectionStakePoolPdaAuthority] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("collection-stake-pool"),
+        toWeb3JsPublicKey(collectionMintAddress).toBuffer(),
+      ],
+      program.programId
+    );
+    const stakePoolId = (
+      await program.account.collectionStakePoolPdaAuthorityAccount.fetch(
+        collectionStakePoolPdaAuthority
+      )
+    ).stakePool;
+    const [stakeAuthorizationRecord] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("stake-authorization"),
+        stakePoolId.toBuffer(),
+        toWeb3JsPublicKey(mintAddress).toBuffer(),
+      ],
+      stakePoolProgram.programId
+    );
+    const mintPayerAta = await fetchDigitalAssetWithAssociatedToken(
+      umi,
+      mintAddress,
+      signer.publicKey
+    );
+    const badgePayerAta = await fetchDigitalAssetWithAssociatedToken(
+      umi,
+      badgeAddress,
+      signer.publicKey
+    );
+    const badgeVaultAuthorityAta = getAssociatedTokenAddressSync(
+      toWeb3JsPublicKey(badgeAddress),
+      vaultAuthority,
+      true
+    );
+
+    const [badgeMetadata] = findMetadataPda(umi, { mint: badgeAddress });
+
+    try {
+      await program.methods
+        .unstakeBadgeForDeauthorization()
+        .accounts({
+          mintPayerAta: mintPayerAta.token.publicKey,
+          stakePool: stakePoolId,
+          stakePoolProgram: stakePoolProgram.programId,
+          stakeAuthorizationRecord: stakeAuthorizationRecord,
+          collectionStakePoolPdaAuthority: collectionStakePoolPdaAuthority,
+          vaultAuthority: vaultAuthority,
+          stakeEntry: null,
+          badgeVaultAuthorityAta: badgeVaultAuthorityAta,
+          mint: mintAddress,
+          badgePayerAta: badgePayerAta.token.publicKey,
+          badgeMetadata: badgeMetadata,
+          payer: signer.publicKey,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([toWeb3JsKeypair(signer)])
+        .rpc();
+    } catch (e) {
+      console.log(e);
+    }
+
+    const stakeAuthorizationRecordData =
+      await stakePoolProgram.account.stakeAuthorizationRecord.fetchNullable(
+        stakeAuthorizationRecord
+      );
+    assert(stakeAuthorizationRecordData === null);
   });
 });

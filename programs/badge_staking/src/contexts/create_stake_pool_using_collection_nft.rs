@@ -40,7 +40,7 @@ pub struct CreateStakePoolUsingCollectionNft<'info> {
     #[account(
 		  init,
 		  payer = payer,
-          seeds = [COLLECTION_STAKE_POOL_PREFIX.as_bytes(), collection_payer_ata.mint.as_ref(),stake_pool.key().as_ref()],
+          seeds = [COLLECTION_STAKE_POOL_PREFIX.as_bytes(), collection_payer_ata.mint.as_ref()],
           bump,
 		  space = COLLECTION_STAKE_POOL_PDA_AUTHORITY_ACCOUNT_SIZE
     )]
