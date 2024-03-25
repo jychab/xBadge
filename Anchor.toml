@@ -32,7 +32,7 @@ program = "./deps/mpl-token-metadata/programs/token-metadata/target/deploy/token
 #
 [[test.genesis]]
 address = "H2yQahQ7eQH8HXXPtJSJn8MURRFEWVesTd8PsracXp1S"
-program = "./deps/cardinal-staking/target/deploy/cardinal_reward_distributor.so"
+program = "./deps/soulbound/deps/cardinal-staking/target/deploy/cardinal_reward_distributor.so"
 
 #
 # If this ever changes, make sure to change the
@@ -43,7 +43,7 @@ program = "./deps/cardinal-staking/target/deploy/cardinal_reward_distributor.so"
 #
 [[test.genesis]]
 address = "2gvBmibwtBnbkLExmgsijKy6hGXJneou8X6hkyWQvYnF"
-program = "./deps/cardinal-staking/target/deploy/cardinal_stake_pool.so"
+program = "./deps/soulbound/deps/cardinal-staking/target/deploy/cardinal_stake_pool.so"
 
 #
 # We clone the authorization rules program and the authorization rules account for

@@ -5,6 +5,7 @@ import {
   createNft,
   createV1,
   fetchDigitalAssetWithAssociatedToken,
+  findMasterEditionPda,
   findMetadataPda,
   mintV1,
   mplTokenMetadata,
@@ -18,21 +19,29 @@ import {
   publicKey,
   sol,
 } from "@metaplex-foundation/umi";
+import spl, { createMint, freezeAccount } from "@solana/spl-token";
 
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
-import { Program } from "@coral-xyz/anchor";
+import { BN, Program } from "@coral-xyz/anchor";
 import * as anchor from "@coral-xyz/anchor";
 import {
   IDL as CardinalStakePoolIdl,
   CardinalStakePool,
-} from "../deps/cardinal-staking/src/idl/cardinal_stake_pool";
+} from "../deps/soulbound/deps/cardinal-staking/target/types/cardinal_stake_pool";
 import {
+  IDL as CardinalRewardDistributorIdl,
+  CardinalRewardDistributor,
+} from "../deps/soulbound/deps/cardinal-staking/target/types/cardinal_reward_distributor";
+import {
+  ComputeBudgetProgram,
   Keypair,
   PublicKey,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
 import {
+  fromWeb3JsPublicKey,
   toWeb3JsKeypair,
   toWeb3JsPublicKey,
 } from "@metaplex-foundation/umi-web3js-adapters";
@@ -43,6 +52,12 @@ import {
 } from "@solana/spl-token";
 import { assert } from "chai";
 import { step, xstep } from "mocha-steps";
+import {
+  TOKEN_METADATA_PROGRAM_ID,
+  AUTHORIZATION_RULES,
+  AUTHORIZATION_RULES_PROGRAM_ID,
+  getStakeSeed,
+} from "../deps/soulbound/tests/utils";
 
 describe("XBadge", () => {
   // Configure the client to use the local cluster.
@@ -54,7 +69,16 @@ describe("XBadge", () => {
   const CARDINAL_STAKE_POOL_PROGRAM_ID = new PublicKey(
     "2gvBmibwtBnbkLExmgsijKy6hGXJneou8X6hkyWQvYnF"
   );
+
+  // const CARDINAL_REWARD_DISTRIBUTOR_PROGRAM_ID = new PublicKey(
+  //   "H2yQahQ7eQH8HXXPtJSJn8MURRFEWVesTd8PsracXp1S"
+  // );
   const program = anchor.workspace.XBadge as Program<XBadge>;
+
+  // const rewardDistributorProgram = new Program<CardinalRewardDistributor>(
+  //   CardinalRewardDistributorIdl,
+  //   CARDINAL_REWARD_DISTRIBUTOR_PROGRAM_ID
+  // );
 
   const stakePoolProgram = new Program<CardinalStakePool>(
     CardinalStakePoolIdl,
@@ -78,12 +102,151 @@ describe("XBadge", () => {
   let collectionMetadataAddress;
   let identifierId;
   let identifier;
-
-  let mintAddress: KeypairSigner["publicKey"];
   let badgeAddress: KeypairSigner["publicKey"];
+  let stakePoolId;
+  let collectionStakePoolPdaAuthority;
 
-  step("Create a colletion nft & mint fungible asset", async () => {
-    await umi.rpc.airdrop(signer.publicKey, sol(2));
+  //
+  // Mint for the gold point system.
+  //
+  // let goldMint: PublicKey;
+
+  //
+  // NFTs. These are the two mad lads for the tests.
+  //
+  let nftA: {
+    mintAddress: PublicKey;
+    masterEditionAddress: PublicKey;
+    metadataAddress: PublicKey;
+  };
+  let nftB: {
+    mintAddress: PublicKey;
+    masterEditionAddress: PublicKey;
+    metadataAddress: PublicKey;
+  };
+  let collection: {
+    mintAddress: PublicKey;
+    masterEditionAddress: PublicKey;
+    metadataAddress: PublicKey;
+  };
+
+  //
+  // Misc accounts used across tests.
+  //
+  // let sba: PublicKey; // Soulbound Authority.
+  // let rewardDistributor: PublicKey;
+
+  // step("Setup: creates the gold mint", async () => {
+  //   await umi.rpc.airdrop(signer.publicKey, sol(10));
+  //   const goldMintKeypair = Keypair.generate();
+  //   goldMint = goldMintKeypair.publicKey;
+
+  //   console.log("ARMANI GOLD MINT", goldMint.toString());
+
+  //   await createMint(
+  //     program.provider.connection,
+  //     toWeb3JsKeypair(signer),
+  //     toWeb3JsPublicKey(signer.publicKey),
+  //     toWeb3JsPublicKey(signer.publicKey),
+  //     0,
+  //     goldMintKeypair
+  //   );
+  // });
+
+  step(
+    "Setup: creates two nfts, verified as part of the same collection",
+    async () => {
+      let madLadCollection = generateSigner(umi);
+      await createNft(umi, {
+        tokenOwner: signer.publicKey,
+        mint: madLadCollection,
+        name: "My SFT Collection",
+        uri: "https://example.com/my-collection.json",
+        sellerFeeBasisPoints: percentAmount(5.5), // 5.5%
+        creators: [{ address: signer.publicKey, verified: true, share: 100 }],
+        isCollection: true,
+      }).sendAndConfirm(umi);
+      collection = {
+        mintAddress: toWeb3JsPublicKey(madLadCollection.publicKey),
+        masterEditionAddress: toWeb3JsPublicKey(
+          findMasterEditionPda(umi, {
+            mint: madLadCollection.publicKey,
+          })[0]
+        ),
+        metadataAddress: toWeb3JsPublicKey(
+          findMetadataPda(umi, {
+            mint: madLadCollection.publicKey,
+          })[0]
+        ),
+      };
+      let madlad1 = generateSigner(umi);
+      await createNft(umi, {
+        tokenOwner: signer.publicKey,
+        mint: madlad1,
+        name: "My Digital Collectible",
+        uri: "https://arweave.net/my-content-hash",
+        sellerFeeBasisPoints: percentAmount(5.5), // 5.5%
+        isMutable: true,
+        collection: {
+          key: madLadCollection.publicKey,
+          verified: false,
+        },
+        ruleSet: fromWeb3JsPublicKey(AUTHORIZATION_RULES),
+      }).sendAndConfirm(umi);
+      nftA = {
+        mintAddress: toWeb3JsPublicKey(madlad1.publicKey),
+        masterEditionAddress: toWeb3JsPublicKey(
+          findMasterEditionPda(umi, {
+            mint: madlad1.publicKey,
+          })[0]
+        ),
+        metadataAddress: toWeb3JsPublicKey(
+          findMetadataPda(umi, {
+            mint: madlad1.publicKey,
+          })[0]
+        ),
+      };
+      let madlad2 = generateSigner(umi);
+      await createNft(umi, {
+        tokenOwner: signer.publicKey,
+        mint: madlad2,
+        name: "My Digital Collectible",
+        uri: "https://arweave.net/my-content-hash",
+        sellerFeeBasisPoints: percentAmount(5.5), // 5.5%
+        collection: {
+          key: madLadCollection.publicKey,
+          verified: false,
+        },
+        isMutable: true,
+        ruleSet: fromWeb3JsPublicKey(AUTHORIZATION_RULES),
+      }).sendAndConfirm(umi);
+      nftB = {
+        mintAddress: toWeb3JsPublicKey(madlad2.publicKey),
+        masterEditionAddress: toWeb3JsPublicKey(
+          findMasterEditionPda(umi, {
+            mint: madlad2.publicKey,
+          })[0]
+        ),
+        metadataAddress: toWeb3JsPublicKey(
+          findMetadataPda(umi, {
+            mint: madlad2.publicKey,
+          })[0]
+        ),
+      };
+      await verifyCollectionV1(umi, {
+        metadata: findMetadataPda(umi, { mint: madlad1.publicKey }),
+        collectionMint: madLadCollection.publicKey,
+        authority: umi.payer,
+      }).sendAndConfirm(umi);
+      await verifyCollectionV1(umi, {
+        metadata: findMetadataPda(umi, { mint: madlad2.publicKey }),
+        collectionMint: madLadCollection.publicKey,
+        authority: umi.payer,
+      }).sendAndConfirm(umi);
+    }
+  );
+
+  step("Create a colletion nft & mint fungible badge", async () => {
     const collectionMint = generateSigner(umi);
     await createNft(umi, {
       tokenOwner: signer.publicKey,
@@ -103,16 +266,6 @@ describe("XBadge", () => {
       ],
       toWeb3JsPublicKey(MPL_TOKEN_METADATA_PROGRAM_ID)
     );
-
-    const mint = generateSigner(umi);
-    await createNft(umi, {
-      tokenOwner: signer.publicKey,
-      mint: mint,
-      name: "XYZ",
-      uri: "https://example.com/my-collection.json",
-      sellerFeeBasisPoints: percentAmount(5.5), // 5.5%
-    }).sendAndConfirm(umi);
-    mintAddress = mint.publicKey;
 
     const badge = generateSigner(umi);
     await createV1(umi, {
@@ -166,12 +319,12 @@ describe("XBadge", () => {
   });
 
   step("Initialize a stake pool", async () => {
-    const [stakePoolId] = PublicKey.findProgramAddressSync(
+    [stakePoolId] = PublicKey.findProgramAddressSync(
       [Buffer.from("stake-pool"), identifier.toArrayLike(Buffer, "le", 8)],
       stakePoolProgram.programId
     );
 
-    const [collectionStakePoolPdaAuthority] = PublicKey.findProgramAddressSync(
+    [collectionStakePoolPdaAuthority] = PublicKey.findProgramAddressSync(
       [
         Buffer.from("collection-stake-pool"),
         toWeb3JsPublicKey(collectionMintAddress).toBuffer(),
@@ -246,20 +399,17 @@ describe("XBadge", () => {
     const [badgeMetadata] = findMetadataPda(umi, { mint: badgeAddress });
 
     const [vaultAuthority] = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("vault-authority"),
-        toWeb3JsPublicKey(mintAddress).toBuffer(),
-      ],
+      [Buffer.from("vault-authority"), nftA.mintAddress.toBuffer()],
       program.programId
     );
-    const [collectionStakePoolPdaAuthority] = PublicKey.findProgramAddressSync(
+    [collectionStakePoolPdaAuthority] = PublicKey.findProgramAddressSync(
       [
         Buffer.from("collection-stake-pool"),
         toWeb3JsPublicKey(collectionMintAddress).toBuffer(),
       ],
       program.programId
     );
-    const stakePoolId = (
+    stakePoolId = (
       await program.account.collectionStakePoolPdaAuthorityAccount.fetch(
         collectionStakePoolPdaAuthority
       )
@@ -268,13 +418,13 @@ describe("XBadge", () => {
       [
         Buffer.from("stake-authorization"),
         stakePoolId.toBuffer(),
-        toWeb3JsPublicKey(mintAddress).toBuffer(),
+        nftA.mintAddress.toBuffer(),
       ],
       stakePoolProgram.programId
     );
     const mintPayerAta = await fetchDigitalAssetWithAssociatedToken(
       umi,
-      mintAddress,
+      fromWeb3JsPublicKey(nftA.mintAddress),
       signer.publicKey
     );
     const badgePayerAta = await fetchDigitalAssetWithAssociatedToken(
@@ -318,7 +468,7 @@ describe("XBadge", () => {
       );
     assert(
       stakeAuthorizationRecordData.mint.toBase58() ===
-        toWeb3JsPublicKey(mintAddress).toBase58(),
+        nftA.mintAddress.toBase58(),
       "Invalid mint on authorization record"
     );
     assert(
@@ -327,15 +477,75 @@ describe("XBadge", () => {
     );
   });
 
+  // step("Stake NftA Token", async () => {
+  //   const stakeEntry = PublicKey.findProgramAddressSync(
+  //     [
+  //       Buffer.from("stake-entry"),
+  //       stakePoolId.toBuffer(),
+  //       nftA.mintAddress.toBuffer(),
+  //       getStakeSeed(1, toWeb3JsPublicKey(signer.publicKey)).toBuffer(),
+  //     ],
+  //     stakePoolProgram.programId
+  //   )[0];
+  //   const rewardEntry = PublicKey.findProgramAddressSync(
+  //     [
+  //       Buffer.from("reward-entry"),
+  //       rewardDistributor.toBuffer(),
+  //       stakeEntry.toBuffer(),
+  //     ],
+  //     rewardDistributorProgram.programId
+  //   )[0];
+  //   const ata = await anchor.utils.token.associatedAddress({
+  //     mint: nftA.mintAddress,
+  //     owner: toWeb3JsPublicKey(signer.publicKey),
+  //   });
+  //   const tokenRecord = PublicKey.findProgramAddressSync(
+  //     [
+  //       Buffer.from("metadata"),
+  //       TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+  //       nftA.mintAddress.toBuffer(),
+  //       Buffer.from("token_record"),
+  //       ata.toBuffer(),
+  //     ],
+  //     TOKEN_METADATA_PROGRAM_ID
+  //   )[0];
+  //   return await stakePoolProgram.methods
+  //     .stakeProgrammable(new anchor.BN(1))
+  //     .accounts({
+  //       stakeEntry,
+  //       rewardEntry,
+  //       rewardDistributor,
+  //       stakePool: stakePoolId,
+  //       originalMint: nftA.mintAddress,
+  //       user: signer.publicKey,
+  //       userOriginalMintTokenAccount: ata,
+  //       userOriginalMintTokenRecord: tokenRecord,
+  //       mintMetadata: nftA.metadataAddress,
+  //       mintEdition: nftA.masterEditionAddress,
+  //       authorizationRules: AUTHORIZATION_RULES,
+  //       sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+  //       tokenProgram: TOKEN_PROGRAM_ID,
+  //       tokenMetadataProgram: TOKEN_METADATA_PROGRAM_ID,
+  //       authorizationRulesProgram: AUTHORIZATION_RULES_PROGRAM_ID,
+  //       rewardDistributorProgram: rewardDistributorProgram.programId,
+  //       systemProgram: SystemProgram.programId,
+  //     })
+  //     .preInstructions([
+  //       ComputeBudgetProgram.setComputeUnitLimit({
+  //         units: 1000000,
+  //       }),
+  //     ])
+  //     .rpc({
+  //       skipPreflight: true,
+  //     });
+  // });
+
   step("Unstake Badge for Deauthorization", async () => {
     const [vaultAuthority] = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("vault-authority"),
-        toWeb3JsPublicKey(mintAddress).toBuffer(),
-      ],
+      [Buffer.from("vault-authority"), nftA.mintAddress.toBuffer()],
       program.programId
     );
-    const [collectionStakePoolPdaAuthority] = PublicKey.findProgramAddressSync(
+    [collectionStakePoolPdaAuthority] = PublicKey.findProgramAddressSync(
       [
         Buffer.from("collection-stake-pool"),
         toWeb3JsPublicKey(collectionMintAddress).toBuffer(),
@@ -351,13 +561,13 @@ describe("XBadge", () => {
       [
         Buffer.from("stake-authorization"),
         stakePoolId.toBuffer(),
-        toWeb3JsPublicKey(mintAddress).toBuffer(),
+        nftA.mintAddress.toBuffer(),
       ],
       stakePoolProgram.programId
     );
     const mintPayerAta = await fetchDigitalAssetWithAssociatedToken(
       umi,
-      mintAddress,
+      fromWeb3JsPublicKey(nftA.mintAddress),
       signer.publicKey
     );
     const badgePayerAta = await fetchDigitalAssetWithAssociatedToken(
@@ -385,7 +595,7 @@ describe("XBadge", () => {
           vaultAuthority: vaultAuthority,
           stakeEntry: null,
           badgeVaultAuthorityAta: badgeVaultAuthorityAta,
-          mint: mintAddress,
+          mint: nftA.mintAddress,
           badgePayerAta: badgePayerAta.token.publicKey,
           badgeMetadata: badgeMetadata,
           payer: signer.publicKey,
