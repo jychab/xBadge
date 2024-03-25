@@ -3,10 +3,10 @@ seeds = false
 skip-lint = false
 
 [programs.mainnet]
-badge_staking = "CrZVQmQ11QC6xz9RoBHWWFixhfJh5FHXwpwNL264bPmq"
+x_badge = "CrZVQmQ11QC6xz9RoBHWWFixhfJh5FHXwpwNL264bPmq"
 
 [programs.localnet]
-badge_staking = "CrZVQmQ11QC6xz9RoBHWWFixhfJh5FHXwpwNL264bPmq"
+x_badge = "CrZVQmQ11QC6xz9RoBHWWFixhfJh5FHXwpwNL264bPmq"
 
 [registry]
 url = "https://api.apr.dev"

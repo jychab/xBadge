@@ -1,4 +1,4 @@
-import { BadgeStaking } from "../target/types/badge_staking";
+import { XBadge } from "../target/types/x_badge";
 import {
   MPL_TOKEN_METADATA_PROGRAM_ID,
   TokenStandard,
@@ -44,7 +44,7 @@ import {
 import { assert } from "chai";
 import { step, xstep } from "mocha-steps";
 
-describe("badge_staking", () => {
+describe("XBadge", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
 
@@ -54,7 +54,7 @@ describe("badge_staking", () => {
   const CARDINAL_STAKE_POOL_PROGRAM_ID = new PublicKey(
     "2gvBmibwtBnbkLExmgsijKy6hGXJneou8X6hkyWQvYnF"
   );
-  const program = anchor.workspace.BadgeStaking as Program<BadgeStaking>;
+  const program = anchor.workspace.XBadge as Program<XBadge>;
 
   const stakePoolProgram = new Program<CardinalStakePool>(
     CardinalStakePoolIdl,

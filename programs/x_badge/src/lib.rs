@@ -11,7 +11,7 @@ pub use contexts::*;
 pub use error::*;
 
 #[program]
-pub mod badge_staking {
+pub mod x_badge {
 
     use super::*;
 
