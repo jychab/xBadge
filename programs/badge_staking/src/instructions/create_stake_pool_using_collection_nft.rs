@@ -28,15 +28,19 @@ pub fn handler<'info>(
     if collection_metadata.collection_details.is_none() {
         return err!(CustomError::NotCollectionNft);
     }
-    // Make sure signer is one of the creator for the collection nft
+    // Make sure signer is one of the creators or update authority
     if let Some(creators) = collection_metadata.creators {
         let found_item = creators
             .iter()
             .find(|&x| x.verified && x.address == ctx.accounts.payer.key());
         match found_item {
-            Some(_) => msg!("Signer is one of the creators of the collection nft"),
+            Some(_) => msg!("Signer is one of the creators for the collection nft"),
             None => return err!(CustomError::AuthorityMismatch),
         }
+    } else if collection_metadata.update_authority == ctx.accounts.payer.key() {
+        msg!("Signer is the updated authority for the collection nft")
+    } else {
+        return err!(CustomError::AuthorityMismatch);
     }
 
     ctx.accounts.collection_stake_pool_pda_authority.bump = *ctx
@@ -47,6 +51,15 @@ pub fn handler<'info>(
         ctx.accounts.collection_payer_ata.mint;
     ctx.accounts.collection_stake_pool_pda_authority.stake_pool = ctx.accounts.stake_pool.key();
 
+    init_pool_cpi(ctx, data);
+
+    Ok(())
+}
+
+fn init_pool_cpi(
+    ctx: Context<'_, '_, '_, '_, CreateStakePoolUsingCollectionNft<'_>>,
+    data: InitializeArgs,
+) {
     let accounts: Vec<solana_program::instruction::AccountMeta> = vec![
         AccountMeta::new(ctx.accounts.stake_pool.key(), false),
         AccountMeta::new(ctx.accounts.identifier.key(), false),
@@ -88,6 +101,4 @@ pub fn handler<'info>(
         &account_infos[..],
         signer_seeds,
     );
-
-    Ok(())
 }

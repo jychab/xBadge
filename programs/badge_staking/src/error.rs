@@ -2,15 +2,15 @@ use anchor_lang::error_code;
 
 #[error_code]
 pub enum CustomError {
-    #[msg("Signer is not one of the verified creator for the collection")]
+    #[msg("Signer is not a verified creator or update authority of the Nft")]
     AuthorityMismatch,
     #[msg("Metadata does not belong to Mint")]
     MintMetadataMismatch,
-    #[msg("Collection Mint is not a collection nft")]
+    #[msg("Mint is not a collection Nft")]
     NotCollectionNft,
     #[msg("Mint does not have a collection")]
     NoCollectionFound,
-    #[msg("Badge collection does not match given stake pool")]
+    #[msg("Collection does not match given stake pool")]
     StakePoolMismatch,
     #[msg("Unable to deauthorize mint because mint is still staked")]
     MintIsStillStaked,
